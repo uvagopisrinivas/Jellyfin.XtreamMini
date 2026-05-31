@@ -12,7 +12,7 @@
         "changelog": "Fix lazy evaluation for TV apps, seasons disappearing after watching, VOD audio track selection & duration via probing",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/uvagopisrinivas/Jellyfin.XtreamMini/releases/download/v0.8.2/Jellyfin.Xtream-v0.8.2.zip",
-        "checksum": "bb493732de59d1d939202fca7a31a22e27a6ef21af0b5a37d4de7d6843658f78",
+        "checksum": "cd4bb5ff7350a31762a6d18d4f7e5320",
         "timestamp": "2026-05-30T20:30:00Z"
       }
     ]
