@@ -8,8 +8,16 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "0.9.19.0",
+        "changelog": "VOD direct play (no forced deinterlace), always probe for real audio tracks",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/uvagopisrinivas/Jellyfin.XtreamMini/releases/download/v0.9.19/Jellyfin.Xtream-v0.9.19.zip",
+        "checksum": "6927695300fd8c22429870c4c9260db4",
+        "timestamp": "2026-05-30T21:38:00Z"
+      },
+      {
         "version": "0.9.18.0",
-        "changelog": "Full release: lazy eval fix, seasons stability, audio track parsing, VOD duration",
+        "changelog": "Full sync: lazy eval fix, seasons stability, audio track parsing, VOD duration",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/uvagopisrinivas/Jellyfin.XtreamMini/releases/download/v0.9.18/Jellyfin.Xtream-v0.9.18.zip",
         "checksum": "1cd7dc82cffefb709a09e6825d32254b",
