@@ -414,13 +414,15 @@ public partial class StreamService(IXtreamClient xtreamClient)
 
         bool isLive = type == StreamType.Live;
 
-        // For VOD, use empty MediaStreams and let Jellyfin probe the stream to discover
-        // real audio/video/subtitle tracks, duration, and codec info automatically.
-        // This enables proper audio track selection, duration display, and watched status.
-        var mediaStreams = type == StreamType.Vod
-            ? new List<MediaStream>()
-            : new List<MediaStream>
-            {
+        return new MediaSourceInfo()
+        {
+            Container = extension,
+            EncoderProtocol = MediaProtocol.Http,
+            Id = ToGuid(MediaSourcePrefix, (int)type, id, 0).ToString(),
+            IsInfiniteStream = isLive,
+            IsRemote = true,
+            MediaStreams =
+            [
                 new()
                 {
                     AspectRatio = videoInfo?.AspectRatio,
@@ -451,16 +453,7 @@ public partial class StreamService(IXtreamClient xtreamClient)
                     SampleRate = audioInfo?.SampleRate,
                     Type = MediaStreamType.Audio,
                 }
-            };
-
-        return new MediaSourceInfo()
-        {
-            Container = extension,
-            EncoderProtocol = MediaProtocol.Http,
-            Id = ToGuid(MediaSourcePrefix, (int)type, id, 0).ToString(),
-            IsInfiniteStream = isLive,
-            IsRemote = true,
-            MediaStreams = mediaStreams,
+            ],
             Name = "default",
             Path = uri,
             Protocol = MediaProtocol.Http,
