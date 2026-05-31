@@ -541,7 +541,7 @@ public partial class StreamService(IXtreamClient xtreamClient)
                 Height = videoInfo.Height,
                 Index = videoInfo.Index,
                 IsAVC = videoInfo.IsAVC,
-                IsInterlaced = true,
+                IsInterlaced = isLive,
                 Level = videoInfo.Level,
                 PixelFormat = videoInfo.PixelFormat,
                 Profile = videoInfo.Profile,
@@ -656,7 +656,7 @@ public partial class StreamService(IXtreamClient xtreamClient)
             RequiresOpening = restream,
             SupportsDirectPlay = true,
             SupportsDirectStream = true,
-            SupportsProbing = !hasLanguageTracks,
+            SupportsProbing = !isLive && !hasLanguageTracks,
         };
     }
 

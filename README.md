@@ -1,9 +1,9 @@
 # Jellyfin.Xtream
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/uvagopisrinivas/Jellyfin.Xtream/total)
-![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/uvagopisrinivas/Jellyfin.Xtream/latest/total)
-![GitHub commits since latest release](https://img.shields.io/github/commits-since/uvagopisrinivas/Jellyfin.Xtream/latest)
-![Dynamic YAML Badge](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fuvagopisrinivas%2FJellyfin.Xtream%2Frefs%2Fheads%2Fmaster%2Fbuild.yaml&query=targetAbi&label=Jellyfin%20ABI)
-![Dynamic YAML Badge](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fuvagopisrinivas%2FJellyfin.Xtream%2Frefs%2Fheads%2Fmaster%2Fbuild.yaml&query=framework&label=.NET%20framework)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/uvagopisrinivas/Jellyfin.XtreamMini/total)
+![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/uvagopisrinivas/Jellyfin.XtreamMini/latest/total)
+![GitHub commits since latest release](https://img.shields.io/github/commits-since/uvagopisrinivas/Jellyfin.XtreamMini/latest)
+![Dynamic YAML Badge](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fuvagopisrinivas%2FJellyfin.XtreamMini%2Frefs%2Fheads%2Fmaster%2Fbuild.yaml&query=targetAbi&label=Jellyfin%20ABI)
+![Dynamic YAML Badge](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fuvagopisrinivas%2FJellyfin.XtreamMini%2Frefs%2Fheads%2Fmaster%2Fbuild.yaml&query=framework&label=.NET%20framework)
 
 > **Note:** This is a fork with bug fixes for series episodes disappearing and VOD duration tracking issues. Original project by [Kevinjil](https://github.com/Kevinjil/Jellyfin.Xtream).
 
@@ -41,7 +41,7 @@ To add the repository, follow these steps:
 1. Select the `Repositories` tab on the top of the page.
 1. Click the `+` symbol to add a repository.
 1. Enter `Jellyfin.Xtream` as the repository name.
-1. Enter `https://uvagopisrinivas.github.io/Jellyfin.Xtream/repository.json` as the repository url (or use the original: [`https://kevinjil.github.io/Jellyfin.Xtream/repository.json`](https://kevinjil.github.io/Jellyfin.Xtream/repository.json)).
+1. Enter `https://uvagopisrinivas.github.io/Jellyfin.XtreamMini/repository.json` as the repository url.
 1. Click save.
 
 **Alternative:** Download the latest release directly from the [Releases page](https://github.com/uvagopisrinivas/Jellyfin.Xtream/releases) and manually install the DLL.
@@ -94,60 +94,9 @@ The following credentials should be set correctly in the `Credentials` plugin co
 1. Enable `Show the catch-up channel to users`.
 1. Click `Save` on the bottom of the page.
 
-## Deployment (Docker)
+## Deployment
 
-If you're running Jellyfin in Docker, follow these steps to deploy the plugin:
-
-### Prerequisites
-
-- SSH access to your server
-- Jellyfin running in Docker container
-- Plugin directory mounted as volume
-
-### Quick Deployment
-
-```bash
-#!/bin/bash
-VERSION="0.9.17"
-PLUGIN_DIR="/srv/nvme-appdata/configs/jellyfin/config/plugins/Jellyfin.Xtream_5d774c35-8567-46d3-a950-9bb8227a0c5d"
-
-cd /tmp
-rm -f Jellyfin.Xtream.dll
-wget "https://github.com/uvagopisrinivas/Jellyfin.Xtream/releases/download/v${VERSION}/Jellyfin.Xtream.dll"
-docker stop jellyfin
-rm -rf "$PLUGIN_DIR"
-mkdir -p "$PLUGIN_DIR"
-cp /tmp/Jellyfin.Xtream.dll "$PLUGIN_DIR/"
-cat > "$PLUGIN_DIR/meta.json" << EOF
-{"Name": "Jellyfin Xtream","Guid": "5d774c35-8567-46d3-a950-9bb8227a0c5d","Version": "${VERSION}.0","TargetAbi": "10.11.0.0","Framework": "net9.0","Overview": "Stream content from an Xtream-compatible server.","Description": "Stream Live IPTV, Video On-Demand, and Series from an Xtream-compatible server using this plugin.","Category": "LiveTV","Owner": "uvagopisrinivas"}
-EOF
-chown -R 1000:100 "$PLUGIN_DIR"
-docker start jellyfin
-sleep 20
-docker logs jellyfin --tail 50 | grep "Jellyfin Xtream"
-```
-
-> **Note:** Adjust `PLUGIN_DIR` to match your Docker volume mapping. The `meta.json` is required for Jellyfin to recognize the plugin.
-
-### Finding Your Plugin Directory
-
-Your plugin directory depends on your Docker volume mapping. Common locations:
-
-```bash
-# Check your container's volume mounts
-docker inspect your-jellyfin-container | grep -A 10 Mounts
-
-# Common paths:
-# /config/plugins/
-# /var/lib/jellyfin/plugins/
-# /MediaServer/jellyfin/config/plugins/
-```
-
-### Verify Installation
-
-1. Open Jellyfin Dashboard → Plugins
-2. Check that "Jellyfin Xtream" shows the correct version
-3. Check logs: `docker logs your-jellyfin-container --tail 100`
+This plugin is deployed via the Jellyfin plugin catalog. After adding the repository URL above, install/update directly from Dashboard → Plugins → Catalog. No manual script deployment needed.
 
 ## Development
 
