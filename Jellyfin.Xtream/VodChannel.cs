@@ -16,7 +16,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Xtream.Client.Models;
@@ -110,29 +109,44 @@ public class VodChannel(ILogger<VodChannel> logger) : IChannel, IDisableMediaSou
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to get channel items");
-            throw;
+            return new ChannelItemResult()
+            {
+                TotalRecordCount = 0,
+            };
         }
     }
 
-    private Task<ChannelItemInfo> CreateChannelItemInfo(StreamInfo stream)
+    private static ChannelItemInfo CreateChannelItemInfo(StreamInfo stream)
     {
-        long added = long.Parse(stream.Added, CultureInfo.InvariantCulture);
         ParsedName parsedName = StreamService.ParseName(stream.Name);
 
+        DateTime? dateCreated = null;
+        if (!string.IsNullOrWhiteSpace(stream.Added) && long.TryParse(stream.Added, CultureInfo.InvariantCulture, out long added) && added > 0)
+        {
+            dateCreated = DateTimeOffset.FromUnixTimeSeconds(added).DateTime;
+        }
+
+        // Build media source from the stream list data only.
+        // Detailed VOD info (duration, TMDB ID, audio/video codec details) is
+        // fetched later by XtreamVodProvider during metadata refresh, so we
+        // skip the per-item GetVodInfoAsync call here to keep browsing fast.
         List<MediaSourceInfo> sources =
         [
             Plugin.Instance.StreamService.GetMediaSourceInfo(
                 StreamType.Vod,
                 stream.StreamId,
-                stream.ContainerExtension)
+                stream.ContainerExtension,
+                name: stream.Name)
         ];
 
-        ChannelItemInfo result = new ChannelItemInfo()
+        string? imageUrl = !string.IsNullOrWhiteSpace(stream.StreamIcon) ? stream.StreamIcon : null;
+
+        return new ChannelItemInfo()
         {
             ContentType = ChannelMediaContentType.Movie,
-            DateCreated = DateTimeOffset.FromUnixTimeSeconds(added).DateTime,
+            DateCreated = dateCreated,
             Id = $"{StreamService.StreamPrefix}{stream.StreamId}",
-            ImageUrl = stream.StreamIcon,
+            ImageUrl = imageUrl,
             IsLiveStream = false,
             MediaSources = sources,
             MediaType = ChannelMediaType.Video,
@@ -141,15 +155,25 @@ public class VodChannel(ILogger<VodChannel> logger) : IChannel, IDisableMediaSou
             Type = ChannelItemType.Media,
             ProviderIds = { { XtreamVodProvider.ProviderName, stream.StreamId.ToString(CultureInfo.InvariantCulture) } },
         };
-
-        return Task.FromResult(result);
     }
 
     private async Task<ChannelItemResult> GetCategories(CancellationToken cancellationToken)
     {
         IEnumerable<Category> categories = await Plugin.Instance.StreamService.GetVodCategories(cancellationToken).ConfigureAwait(false);
-        List<ChannelItemInfo> items = new List<ChannelItemInfo>(
-            categories.Select((Category category) => StreamService.CreateChannelItemInfo(StreamService.VodCategoryPrefix, category)));
+        List<ChannelItemInfo> items = [];
+
+        foreach (var category in categories)
+        {
+            try
+            {
+                items.Add(StreamService.CreateChannelItemInfo(StreamService.VodCategoryPrefix, category));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Skipping VOD category {CategoryId} due to error", category.CategoryId);
+            }
+        }
+
         return new()
         {
             Items = items,
@@ -160,13 +184,25 @@ public class VodChannel(ILogger<VodChannel> logger) : IChannel, IDisableMediaSou
     private async Task<ChannelItemResult> GetStreams(int categoryId, CancellationToken cancellationToken)
     {
         IEnumerable<StreamInfo> streams = await Plugin.Instance.StreamService.GetVodStreams(categoryId, cancellationToken).ConfigureAwait(false);
-        List<ChannelItemInfo> items = [.. await Task.WhenAll(streams.Select(CreateChannelItemInfo)).ConfigureAwait(false)];
-        ChannelItemResult result = new ChannelItemResult()
+        List<ChannelItemInfo> items = [];
+
+        foreach (var stream in streams)
+        {
+            try
+            {
+                items.Add(CreateChannelItemInfo(stream));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Skipping VOD stream {StreamId} in category {CategoryId} due to error", stream.StreamId, categoryId);
+            }
+        }
+
+        return new()
         {
             Items = items,
             TotalRecordCount = items.Count
         };
-        return result;
     }
 
     /// <inheritdoc />

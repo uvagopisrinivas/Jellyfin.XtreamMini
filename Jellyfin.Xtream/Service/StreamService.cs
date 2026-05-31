@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -36,6 +37,14 @@ namespace Jellyfin.Xtream.Service;
 /// <param name="xtreamClient">Instance of the <see cref="IXtreamClient"/> interface.</param>
 public partial class StreamService(IXtreamClient xtreamClient)
 {
+    /// <summary>
+    /// Cache duration for series info responses to avoid redundant API calls
+    /// when navigating from seasons to episodes within the same series.
+    /// </summary>
+    private static readonly TimeSpan SeriesCacheDuration = TimeSpan.FromMinutes(5);
+
+    private readonly ConcurrentDictionary<int, (SeriesStreamInfo Data, DateTime FetchedAt)> _seriesCache = new();
+
     /// <summary>
     /// The id prefix for VOD category channel items.
     /// </summary>
@@ -94,14 +103,84 @@ public partial class StreamService(IXtreamClient xtreamClient)
     private static readonly Regex _tagRegex = TagRegex();
 
     /// <summary>
+    /// Map of common language names and abbreviations to ISO 639-2/B codes used by Jellyfin.
+    /// Includes common misspellings found in Xtream provider titles.
+    /// </summary>
+    private static readonly Dictionary<string, string> LanguageMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "TELUGU", "tel" },
+        { "TEL", "tel" },
+        { "TELGUE", "tel" },
+        { "TAMIL", "tam" },
+        { "TAM", "tam" },
+        { "HINDI", "hin" },
+        { "HIN", "hin" },
+        { "ENGLISH", "eng" },
+        { "ENG", "eng" },
+        { "KANNADA", "kan" },
+        { "KAN", "kan" },
+        { "KANNDA", "kan" },
+        { "MALAYALAM", "mal" },
+        { "MAL", "mal" },
+        { "MALYALAM", "mal" },
+        { "BENGALI", "ben" },
+        { "BEN", "ben" },
+        { "MARATHI", "mar" },
+        { "MAR", "mar" },
+        { "GUJARATI", "guj" },
+        { "GUJ", "guj" },
+        { "PUNJABI", "pan" },
+        { "PAN", "pan" },
+        { "URDU", "urd" },
+        { "URD", "urd" },
+        { "ODIA", "ori" },
+        { "ORIYA", "ori" },
+        { "ORI", "ori" },
+        { "ASSAMESE", "asm" },
+        { "ASM", "asm" },
+        { "SPANISH", "spa" },
+        { "SPA", "spa" },
+        { "FRENCH", "fre" },
+        { "FRE", "fre" },
+        { "GERMAN", "ger" },
+        { "GER", "ger" },
+        { "ITALIAN", "ita" },
+        { "ITA", "ita" },
+        { "PORTUGUESE", "por" },
+        { "POR", "por" },
+        { "RUSSIAN", "rus" },
+        { "RUS", "rus" },
+        { "JAPANESE", "jpn" },
+        { "JPN", "jpn" },
+        { "KOREAN", "kor" },
+        { "KOR", "kor" },
+        { "CHINESE", "chi" },
+        { "CHI", "chi" },
+        { "ARABIC", "ara" },
+        { "ARA", "ara" },
+        { "THAI", "tha" },
+        { "THA", "tha" },
+        { "DUTCH", "dut" },
+        { "DUT", "dut" },
+        { "SWEDISH", "swe" },
+        { "SWE", "swe" },
+        { "TURKISH", "tur" },
+        { "TUR", "tur" },
+        { "POLISH", "pol" },
+        { "POL", "pol" },
+        { "PERSIAN", "per" },
+        { "PER", "per" },
+        { "HUNGARIAN", "hun" },
+        { "HUN", "hun" },
+    };
+
+    /// <summary>
     /// Parses tags in the name of a stream entry.
     /// The name commonly contains tags of the forms:
     /// <list>
     /// <item>[TAG]</item>
     /// <item>|TAG|</item>
-    /// <item>| TAG | (with spaces, e.g., | NL |)</item>
     /// </list>
-    /// Supports Unicode pipe variants (│, ┃, ｜) in addition to ASCII pipe.
     /// These tags are parsed and returned as separate strings.
     /// The returned title is cleaned from tags and trimmed.
     /// </summary>
@@ -177,8 +256,8 @@ public partial class StreamService(IXtreamClient xtreamClient)
             if (config.LiveTvOverrides.TryGetValue(stream.StreamId, out ChannelOverrides? overrides))
             {
                 stream.Num = overrides.Number ?? stream.Num;
-                stream.Name = overrides.Name ?? stream.Name;
-                stream.StreamIcon = overrides.LogoUrl ?? stream.StreamIcon;
+                stream.Name = !string.IsNullOrWhiteSpace(overrides.Name) ? overrides.Name : stream.Name;
+                stream.StreamIcon = !string.IsNullOrWhiteSpace(overrides.LogoUrl) ? overrides.LogoUrl : stream.StreamIcon;
             }
 
             return stream;
@@ -260,6 +339,35 @@ public partial class StreamService(IXtreamClient xtreamClient)
     }
 
     /// <summary>
+    /// Gets the series stream info, using a short-lived cache to avoid redundant API calls
+    /// when the user navigates from seasons into episodes of the same series.
+    /// </summary>
+    /// <param name="seriesId">The Xtream id of the Series.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The <see cref="SeriesStreamInfo"/> for the series.</returns>
+    private async Task<SeriesStreamInfo> GetCachedSeriesInfoAsync(int seriesId, CancellationToken cancellationToken)
+    {
+        if (_seriesCache.TryGetValue(seriesId, out var cached) && DateTime.UtcNow - cached.FetchedAt < SeriesCacheDuration)
+        {
+            return cached.Data;
+        }
+
+        SeriesStreamInfo series = await xtreamClient.GetSeriesStreamsBySeriesAsync(Plugin.Instance.Creds, seriesId, cancellationToken).ConfigureAwait(false);
+        _seriesCache[seriesId] = (series, DateTime.UtcNow);
+
+        // Evict stale entries to prevent unbounded growth
+        foreach (var key in _seriesCache.Keys)
+        {
+            if (_seriesCache.TryGetValue(key, out var entry) && DateTime.UtcNow - entry.FetchedAt >= SeriesCacheDuration)
+            {
+                _seriesCache.TryRemove(key, out _);
+            }
+        }
+
+        return series;
+    }
+
+    /// <summary>
     /// Gets an iterator for the configured seasons in the Series.
     /// </summary>
     /// <param name="seriesId">The Xtream id of the Series.</param>
@@ -267,7 +375,7 @@ public partial class StreamService(IXtreamClient xtreamClient)
     /// <returns>IAsyncEnumerable{StreamInfo}.</returns>
     public async Task<IEnumerable<Tuple<SeriesStreamInfo, int>>> GetSeasons(int seriesId, CancellationToken cancellationToken)
     {
-        SeriesStreamInfo series = await xtreamClient.GetSeriesStreamsBySeriesAsync(Plugin.Instance.Creds, seriesId, cancellationToken).ConfigureAwait(false);
+        SeriesStreamInfo series = await GetCachedSeriesInfoAsync(seriesId, cancellationToken).ConfigureAwait(false);
         int categoryId = series.Info.CategoryId;
         if (!IsConfigured(Plugin.Instance.Configuration.Series, categoryId, seriesId))
         {
@@ -279,7 +387,7 @@ public partial class StreamService(IXtreamClient xtreamClient)
         if (series.Seasons != null && series.Seasons.Count > 0)
         {
             // Convert to list immediately to avoid lazy evaluation issues with TV apps
-            return series.Seasons.Select((Season season) => new Tuple<SeriesStreamInfo, int>(series, season.SeasonId)).ToList();
+            return series.Seasons.Select((Season season) => new Tuple<SeriesStreamInfo, int>(series, season.SeasonNumber)).ToList();
         }
 
         // Fallback to Episodes dictionary keys if Seasons list is empty
@@ -295,8 +403,8 @@ public partial class StreamService(IXtreamClient xtreamClient)
     /// <returns>IAsyncEnumerable{StreamInfo}.</returns>
     public async Task<IEnumerable<Tuple<SeriesStreamInfo, Season?, Episode>>> GetEpisodes(int seriesId, int seasonId, CancellationToken cancellationToken)
     {
-        SeriesStreamInfo series = await xtreamClient.GetSeriesStreamsBySeriesAsync(Plugin.Instance.Creds, seriesId, cancellationToken).ConfigureAwait(false);
-        Season? season = series.Seasons?.FirstOrDefault(s => s.SeasonId == seasonId);
+        SeriesStreamInfo series = await GetCachedSeriesInfoAsync(seriesId, cancellationToken).ConfigureAwait(false);
+        Season? season = series.Seasons?.FirstOrDefault(s => s.SeasonNumber == seasonId);
 
         // Check if the season exists in the Episodes dictionary before accessing
         if (!series.Episodes.TryGetValue(seasonId, out ICollection<Episode>? episodes) || episodes == null || episodes.Count == 0)
@@ -375,8 +483,10 @@ public partial class StreamService(IXtreamClient xtreamClient)
     /// <param name="restream">Boolean indicating whether or not restreaming is used.</param>
     /// <param name="start">The datetime representing the start time of catcup TV.</param>
     /// <param name="durationMinutes">The duration in minutes of the catcup TV stream.</param>
+    /// <param name="durationSecs">The duration in seconds of the stream (for VOD/Series).</param>
     /// <param name="videoInfo">The Xtream video info if known.</param>
     /// <param name="audioInfo">The Xtream audio info if known.</param>
+    /// <param name="name">The display name for the media source.</param>
     /// <returns>The media source info as <see cref="MediaSourceInfo"/> class.</returns>
     public MediaSourceInfo GetMediaSourceInfo(
         StreamType type,
@@ -385,8 +495,10 @@ public partial class StreamService(IXtreamClient xtreamClient)
         bool restream = false,
         DateTime? start = null,
         int durationMinutes = 0,
+        int? durationSecs = null,
         VideoInfo? videoInfo = null,
-        AudioInfo? audioInfo = null)
+        AudioInfo? audioInfo = null,
+        string? name = null)
     {
         string prefix = string.Empty;
         switch (type)
@@ -414,59 +526,262 @@ public partial class StreamService(IXtreamClient xtreamClient)
 
         bool isLive = type == StreamType.Live;
 
+        List<MediaBrowser.Model.Entities.MediaStream> mediaStreams = [];
+        if (videoInfo != null && !string.IsNullOrEmpty(videoInfo.CodecName))
+        {
+            mediaStreams.Add(new()
+            {
+                AspectRatio = videoInfo.AspectRatio,
+                BitDepth = videoInfo.BitsPerRawSample,
+                Codec = videoInfo.CodecName,
+                ColorPrimaries = videoInfo.ColorPrimaries,
+                ColorRange = videoInfo.ColorRange,
+                ColorSpace = videoInfo.ColorSpace,
+                ColorTransfer = videoInfo.ColorTransfer,
+                Height = videoInfo.Height,
+                Index = videoInfo.Index,
+                IsAVC = videoInfo.IsAVC,
+                IsInterlaced = true,
+                Level = videoInfo.Level,
+                PixelFormat = videoInfo.PixelFormat,
+                Profile = videoInfo.Profile,
+                Type = MediaStreamType.Video,
+                Width = videoInfo.Width,
+            });
+        }
+
+        if (!isLive && !string.IsNullOrWhiteSpace(name))
+        {
+            // Parse language names from the stream title (e.g. "Movie Telugu + Tamil + Hindi + Eng")
+            // and create an audio MediaStream per language so the player shows track selection.
+            var languages = ParseLanguagesFromName(name);
+            if (languages.Count > 0)
+            {
+                string preferredLang = Plugin.Instance.Configuration.PreferredAudioLanguage;
+                int audioIndex = videoInfo != null ? 1 : 0;
+
+                // If preferred language is found, use its position; otherwise default to first track
+                bool preferredFound = languages.Any(l => string.Equals(l.Code, preferredLang, StringComparison.OrdinalIgnoreCase));
+
+                foreach (var (langName, isoCode) in languages)
+                {
+                    bool isDefault = preferredFound
+                        ? string.Equals(isoCode, preferredLang, StringComparison.OrdinalIgnoreCase)
+                        : audioIndex == (videoInfo != null ? 1 : 0);
+
+                    var stream = new MediaBrowser.Model.Entities.MediaStream()
+                    {
+                        Codec = audioInfo?.CodecName ?? "aac",
+                        Channels = audioInfo?.Channels ?? 2,
+                        SampleRate = audioInfo?.SampleRate ?? 48000,
+                        Index = audioIndex++,
+                        Language = isoCode,
+                        Title = langName,
+                        Type = MediaStreamType.Audio,
+                        IsDefault = isDefault,
+                    };
+
+                    if (audioInfo != null)
+                    {
+                        stream.BitRate = audioInfo.Bitrate;
+                        stream.ChannelLayout = audioInfo.ChannelLayout;
+                        stream.Profile = audioInfo.Profile;
+                    }
+
+                    mediaStreams.Add(stream);
+                }
+            }
+            else if (audioInfo != null && !string.IsNullOrEmpty(audioInfo.CodecName))
+            {
+                // No languages parsed from name, fall back to single audio track from API
+                mediaStreams.Add(new()
+                {
+                    BitRate = audioInfo.Bitrate,
+                    ChannelLayout = audioInfo.ChannelLayout,
+                    Channels = audioInfo.Channels,
+                    Codec = audioInfo.CodecName,
+                    Index = audioInfo.Index,
+                    Profile = audioInfo.Profile,
+                    SampleRate = audioInfo.SampleRate,
+                    Type = MediaStreamType.Audio,
+                });
+            }
+        }
+        else if (audioInfo != null && !string.IsNullOrEmpty(audioInfo.CodecName))
+        {
+            // Live streams: use single audio track from Xtream API
+            mediaStreams.Add(new()
+            {
+                BitRate = audioInfo.Bitrate,
+                ChannelLayout = audioInfo.ChannelLayout,
+                Channels = audioInfo.Channels,
+                Codec = audioInfo.CodecName,
+                Index = audioInfo.Index,
+                Profile = audioInfo.Profile,
+                SampleRate = audioInfo.SampleRate,
+                Type = MediaStreamType.Audio,
+            });
+        }
+
+        // Determine the default audio stream index based on preferred language
+        int? defaultAudioStreamIndex = null;
+        foreach (var ms in mediaStreams)
+        {
+            if (ms.Type == MediaStreamType.Audio && ms.IsDefault)
+            {
+                defaultAudioStreamIndex = ms.Index;
+                break;
+            }
+        }
+
+        // Disable probing only when we have both language tracks AND a known
+        // runtime. Without RunTimeTicks, probing is needed so Jellyfin can
+        // discover the stream duration (required for progress/watched status).
+        bool hasLanguageTracks = defaultAudioStreamIndex.HasValue && durationSecs.HasValue;
+
         return new MediaSourceInfo()
         {
             Container = extension,
+            DefaultAudioStreamIndex = defaultAudioStreamIndex,
             EncoderProtocol = MediaProtocol.Http,
             Id = ToGuid(MediaSourcePrefix, (int)type, id, 0).ToString(),
             IsInfiniteStream = isLive,
             IsRemote = true,
-            MediaStreams =
-            [
-                new()
-                {
-                    AspectRatio = videoInfo?.AspectRatio,
-                    BitDepth = videoInfo?.BitsPerRawSample,
-                    Codec = videoInfo?.CodecName,
-                    ColorPrimaries = videoInfo?.ColorPrimaries,
-                    ColorRange = videoInfo?.ColorRange,
-                    ColorSpace = videoInfo?.ColorSpace,
-                    ColorTransfer = videoInfo?.ColorTransfer,
-                    Height = videoInfo?.Height,
-                    Index = videoInfo?.Index ?? -1,
-                    IsAVC = videoInfo?.IsAVC,
-                    IsInterlaced = true,
-                    Level = videoInfo?.Level,
-                    PixelFormat = videoInfo?.PixelFormat,
-                    Profile = videoInfo?.Profile,
-                    Type = MediaStreamType.Video,
-                    Width = videoInfo?.Width,
-                },
-                new()
-                {
-                    BitRate = audioInfo?.Bitrate,
-                    ChannelLayout = audioInfo?.ChannelLayout,
-                    Channels = audioInfo?.Channels,
-                    Codec = audioInfo?.CodecName,
-                    Index = audioInfo?.Index ?? -1,
-                    Profile = audioInfo?.Profile,
-                    SampleRate = audioInfo?.SampleRate,
-                    Type = MediaStreamType.Audio,
-                }
-            ],
-            Name = "default",
+            RunTimeTicks = durationSecs.HasValue ? durationSecs.Value * TimeSpan.TicksPerSecond : null,
+            MediaStreams = mediaStreams,
+            Name = !string.IsNullOrWhiteSpace(name) ? name : "default",
             Path = uri,
             Protocol = MediaProtocol.Http,
             RequiresClosing = restream,
             RequiresOpening = restream,
             SupportsDirectPlay = true,
             SupportsDirectStream = true,
-            SupportsProbing = true,
+            SupportsProbing = !hasLanguageTracks,
         };
     }
 
-    // Matches tags in brackets [TAG] or pipe-delimited |TAG| (with optional spaces and Unicode pipe variants)
-    // Pipe variants: | (U+007C), │ (U+2502), ┃ (U+2503), ｜ (U+FF5C)
-    [GeneratedRegex(@"\[([^\]]+)\]|[|│┃｜]\s*([^|│┃｜]+?)\s*[|│┃｜]")]
+    /// <summary>
+    /// Parses language names from a stream title.
+    /// Handles all common Xtream provider patterns:
+    /// <list>
+    /// <item>"Telugu + Tamil + Hindi + Eng" (plus-separated)</item>
+    /// <item>"(Hindi+Kannada+Malayalam+Telugu+Tamil)" (plus inside parens)</item>
+    /// <item>"(Hindi)(Kannada)(Malayalam)(Tamil)(Telugu)" (individual parens)</item>
+    /// <item>"[Tam, Tel, Hin, Eng]" (brackets with commas)</item>
+    /// <item>"(Tam, Tel, Hin, Eng)" (parens with commas)</item>
+    /// <item>"Hindi &amp; English" (ampersand-separated)</item>
+    /// <item>"(Telugu) (Tamil) (Hindi)" (spaced individual parens)</item>
+    /// </list>
+    /// </summary>
+    /// <param name="name">The stream name/title.</param>
+    /// <returns>A list of (display name, ISO 639-2 code) tuples.</returns>
+    private static List<(string Name, string Code)> ParseLanguagesFromName(string name)
+    {
+        List<(string Name, string Code)> result = [];
+
+        // 1. Try [Lang, Lang, ...] pattern
+        var bracketMatch = BracketLanguageRegex().Match(name);
+        if (bracketMatch.Success)
+        {
+            AddLanguagesFromDelimitedString(bracketMatch.Groups[1].Value, result);
+        }
+
+        // 2. Try (Lang+Lang) or (Lang, Lang) or (Lang & Lang) — delimiters inside single parens
+        if (result.Count == 0)
+        {
+            var parenMatch = ParenDelimitedLanguageRegex().Match(name);
+            if (parenMatch.Success)
+            {
+                AddLanguagesFromDelimitedString(parenMatch.Groups[1].Value, result);
+            }
+        }
+
+        // 3. Try (Lang)(Lang)(Lang) or (Lang) (Lang) (Lang) — individual parens
+        if (result.Count == 0)
+        {
+            var matches = SingleParenLanguageRegex().Matches(name);
+            if (matches.Count >= 2)
+            {
+                foreach (Match m in matches)
+                {
+                    TryAddLanguage(m.Groups[1].Value.Trim(), result);
+                }
+            }
+        }
+
+        // 4. Try trailing "Lang + Lang + Lang" or "Lang & Lang" after year/title
+        if (result.Count == 0)
+        {
+            var trailingMatch = TrailingLanguageRegex().Match(name);
+            if (trailingMatch.Success)
+            {
+                AddLanguagesFromDelimitedString(trailingMatch.Groups[1].Value, result);
+            }
+        }
+
+        // 5. Fallback: scan for any single language word with word boundary checks
+        if (result.Count == 0)
+        {
+            foreach (var kvp in LanguageMap)
+            {
+                if (name.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
+                {
+                    int idx = name.IndexOf(kvp.Key, StringComparison.OrdinalIgnoreCase);
+                    bool startOk = idx == 0 || !char.IsLetterOrDigit(name[idx - 1]);
+                    bool endOk = (idx + kvp.Key.Length) >= name.Length || !char.IsLetterOrDigit(name[idx + kvp.Key.Length]);
+
+                    if (startOk && endOk && !result.Any(r => string.Equals(r.Code, kvp.Value, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        result.Add((kvp.Key, kvp.Value));
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Splits a delimited string on +, &amp;, and comma, then maps each token to a language.
+    /// </summary>
+    private static void AddLanguagesFromDelimitedString(string input, List<(string Name, string Code)> result)
+    {
+        string[] parts = input.Split(['+', ',', '&'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        foreach (string part in parts)
+        {
+            TryAddLanguage(part, result);
+        }
+    }
+
+    /// <summary>
+    /// Tries to add a single language token to the result list, avoiding duplicates.
+    /// </summary>
+    private static void TryAddLanguage(string token, List<(string Name, string Code)> result)
+    {
+        string cleaned = token.Trim().Trim('(', ')', '[', ']').Trim();
+        if (LanguageMap.TryGetValue(cleaned.ToUpperInvariant(), out string? code)
+            && !result.Any(r => string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase)))
+        {
+            result.Add((cleaned, code));
+        }
+    }
+
+    /// <summary>Matches [content] for bracket-delimited language lists.</summary>
+    [GeneratedRegex(@"\[([^\]]+)\]")]
+    private static partial Regex BracketLanguageRegex();
+
+    /// <summary>Matches (content) where content contains +, comma, or &amp; delimiters.</summary>
+    [GeneratedRegex(@"\(([^)]*[\+,&][^)]*)\)")]
+    private static partial Regex ParenDelimitedLanguageRegex();
+
+    /// <summary>Matches individual (word) tokens for patterns like (Hindi)(Telugu)(Tamil).</summary>
+    [GeneratedRegex(@"\((\w+)\)")]
+    private static partial Regex SingleParenLanguageRegex();
+
+    /// <summary>Matches trailing language list after closing paren, e.g. ") Telugu + Tamil + Hindi".</summary>
+    [GeneratedRegex(@"\)\s+([\w\s\+&,]+)$")]
+    private static partial Regex TrailingLanguageRegex();
+
+    [GeneratedRegex(@"\[([^\]]+)\]|\|([^\|]+)\|")]
     private static partial Regex TagRegex();
 }

@@ -70,8 +70,20 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     /// <summary>
     /// Gets the data version used to trigger a cache invalidation on plugin update or config change.
+    /// Includes a time-based component that rotates every 12 hours so that Jellyfin
+    /// periodically re-fetches channel items from the Xtream API, allowing new episodes
+    /// in ongoing seasons to appear without manual cache clearing.
     /// </summary>
-    public string DataVersion => Assembly.GetCallingAssembly().GetName().Version?.ToString() + Configuration.GetHashCode();
+    public string DataVersion
+    {
+        get
+        {
+            long timeBucket = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 43200; // 12-hour buckets
+            return Assembly.GetCallingAssembly().GetName().Version?.ToString()
+                + Configuration.GetHashCode()
+                + "_" + timeBucket;
+        }
+    }
 
     /// <summary>
     /// Gets the current plugin instance.

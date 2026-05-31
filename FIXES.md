@@ -212,7 +212,7 @@ gh release create vX.Y.Z /tmp/Jellyfin.Xtream-vX.Y.Z.zip \
   --title "vX.Y.Z" --notes "Description" --latest
 
 # 4. Update repository.json on gh-pages
-md5 /tmp/Jellyfin.Xtream-vX.Y.Z.zip  # Jellyfin uses MD5 for checksum verification, NOT SHA256
+shasum -a 256 /tmp/Jellyfin.Xtream-vX.Y.Z.zip
 git stash
 git checkout gh-pages
 # Edit repository.json — add new entry at TOP of versions array:
@@ -220,8 +220,8 @@ git checkout gh-pages
 #   "version": "X.Y.Z.0",
 #   "changelog": "...",
 #   "targetAbi": "10.11.0.0",
-#   "sourceUrl": "https://github.com/uvagopisrinivas/Jellyfin.XtreamMini/releases/download/vX.Y.Z/Jellyfin.Xtream-vX.Y.Z.zip",
-#   "checksum": "<md5>",
+#   "sourceUrl": "https://github.com/YOUR_USER/YOUR_REPO/releases/download/vX.Y.Z/Jellyfin.Xtream-vX.Y.Z.zip",
+#   "checksum": "<sha256>",
 #   "timestamp": "2026-XX-XXTXX:XX:XXZ"
 # }
 git add repository.json
@@ -252,14 +252,14 @@ Run this separately on the OMV GUI using the Scripts feature after a release is 
 #!/bin/bash
 set -e
 
-VERSION="0.8.2"
+VERSION="0.9.17"
 PLUGIN_DIR="/root/compose/jellyfin/config/plugins/Jellyfin.Xtream_5d774c35-8567-46d3-a950-9bb8227a0c5d"
 
 echo "=== Deploying Jellyfin Xtream v${VERSION} ==="
 
 echo "Downloading DLL..."
 rm -f /tmp/Jellyfin.Xtream.dll
-wget -q -L -O /tmp/Jellyfin.Xtream.dll "https://github.com/uvagopisrinivas/Jellyfin.XtreamMini/releases/download/v${VERSION}/Jellyfin.Xtream.dll"
+wget -q -L -O /tmp/Jellyfin.Xtream.dll "https://github.com/uvagopisrinivas/Jellyfin.Xtream/releases/download/v${VERSION}/Jellyfin.Xtream.dll"
 
 if [ ! -s /tmp/Jellyfin.Xtream.dll ]; then
   echo "ERROR: Download failed or file is empty"

@@ -42,6 +42,12 @@ public class XtreamClient(HttpClient client, ILogger<XtreamClient> logger) : IDi
     private readonly JsonSerializerSettings _serializerSettings = new()
     {
         Error = NullableEventHandler(logger),
+        Converters = new List<JsonConverter>
+        {
+            new ObjectOrArrayConverter<Category>(),
+            new ObjectOrArrayConverter<StreamInfo>(),
+            new ObjectOrArrayConverter<Series>()
+        }
     };
 
     public void UpdateUserAgent()
@@ -106,6 +112,14 @@ public class XtreamClient(HttpClient client, ILogger<XtreamClient> logger) : IDi
     {
         Uri uri = new Uri(connectionInfo.BaseUrl + urlPath);
         string jsonContent = await client.GetStringAsync(uri, cancellationToken).ConfigureAwait(false);
+
+        // Log raw JSON for VOD and Series info endpoints to inspect audio track data
+        if (urlPath.Contains("get_vod_info", StringComparison.OrdinalIgnoreCase) ||
+            urlPath.Contains("get_series_info", StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogDebug("Xtream API raw response for {Path}: {Json}", urlPath, jsonContent);
+        }
+
         return JsonConvert.DeserializeObject<T>(jsonContent, _serializerSettings)!;
     }
 
