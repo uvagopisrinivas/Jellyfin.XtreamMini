@@ -274,7 +274,16 @@ public partial class StreamService(IXtreamClient xtreamClient)
             return new List<Tuple<SeriesStreamInfo, int>>();
         }
 
-        return series.Episodes.Keys.Select((int seasonId) => new Tuple<SeriesStreamInfo, int>(series, seasonId));
+        // Use Seasons list as the source of truth instead of Episodes dictionary keys
+        // This prevents seasons from disappearing when the API filters watched episodes
+        if (series.Seasons != null && series.Seasons.Count > 0)
+        {
+            // Convert to list immediately to avoid lazy evaluation issues with TV apps
+            return series.Seasons.Select((Season season) => new Tuple<SeriesStreamInfo, int>(series, season.SeasonId)).ToList();
+        }
+
+        // Fallback to Episodes dictionary keys if Seasons list is empty
+        return series.Episodes.Keys.Select((int seasonId) => new Tuple<SeriesStreamInfo, int>(series, seasonId)).ToList();
     }
 
     /// <summary>
@@ -287,8 +296,17 @@ public partial class StreamService(IXtreamClient xtreamClient)
     public async Task<IEnumerable<Tuple<SeriesStreamInfo, Season?, Episode>>> GetEpisodes(int seriesId, int seasonId, CancellationToken cancellationToken)
     {
         SeriesStreamInfo series = await xtreamClient.GetSeriesStreamsBySeriesAsync(Plugin.Instance.Creds, seriesId, cancellationToken).ConfigureAwait(false);
-        Season? season = series.Seasons.FirstOrDefault(s => s.SeasonId == seasonId);
-        return series.Episodes[seasonId].Select((Episode episode) => new Tuple<SeriesStreamInfo, Season?, Episode>(series, season, episode));
+        Season? season = series.Seasons?.FirstOrDefault(s => s.SeasonId == seasonId);
+
+        // Check if the season exists in the Episodes dictionary before accessing
+        if (!series.Episodes.TryGetValue(seasonId, out ICollection<Episode>? episodes) || episodes == null || episodes.Count == 0)
+        {
+            // Return empty list if season not found instead of crashing
+            return new List<Tuple<SeriesStreamInfo, Season?, Episode>>();
+        }
+
+        // Convert to list immediately to avoid lazy evaluation issues with TV apps
+        return episodes.Select((Episode episode) => new Tuple<SeriesStreamInfo, Season?, Episode>(series, season, episode)).ToList();
     }
 
     private static void StoreBytes(byte[] dst, int offset, int i)
@@ -395,15 +413,14 @@ public partial class StreamService(IXtreamClient xtreamClient)
         }
 
         bool isLive = type == StreamType.Live;
-        return new MediaSourceInfo()
-        {
-            Container = extension,
-            EncoderProtocol = MediaProtocol.Http,
-            Id = ToGuid(MediaSourcePrefix, (int)type, id, 0).ToString(),
-            IsInfiniteStream = isLive,
-            IsRemote = true,
-            MediaStreams =
-            [
+
+        // For VOD, use empty MediaStreams and let Jellyfin probe the stream to discover
+        // real audio/video/subtitle tracks, duration, and codec info automatically.
+        // This enables proper audio track selection, duration display, and watched status.
+        var mediaStreams = type == StreamType.Vod
+            ? new List<MediaStream>()
+            : new List<MediaStream>
+            {
                 new()
                 {
                     AspectRatio = videoInfo?.AspectRatio,
@@ -434,7 +451,16 @@ public partial class StreamService(IXtreamClient xtreamClient)
                     SampleRate = audioInfo?.SampleRate,
                     Type = MediaStreamType.Audio,
                 }
-            ],
+            };
+
+        return new MediaSourceInfo()
+        {
+            Container = extension,
+            EncoderProtocol = MediaProtocol.Http,
+            Id = ToGuid(MediaSourcePrefix, (int)type, id, 0).ToString(),
+            IsInfiniteStream = isLive,
+            IsRemote = true,
+            MediaStreams = mediaStreams,
             Name = "default",
             Path = uri,
             Protocol = MediaProtocol.Http,
